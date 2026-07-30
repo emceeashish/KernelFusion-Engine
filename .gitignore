@@ -1,0 +1,28 @@
+# Build directories
+build/
+bin/
+out/
+.vs/
+*.dir/
+
+# Executables & static libraries
+*.exe
+*.out
+*.app
+*.a
+*.so
+*.dylib
+*.lib
+
+# Generated artifacts & results
+prediction_results.csv
+benchmark_results.csv
+generated_fusion_layout_mock.cu
+ncu_report*
+nsys_report*
+
+# IDE / System
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
