@@ -100,8 +100,8 @@ Verdict:                FUSION WINS
 ### Quick Start
 
 ```bash
-git clone https://github.com/your-username/gpu-operator-fusion-engine.git
-cd gpu-operator-fusion-engine
+git clone https://github.com/emceeashish/KernelFusion-Engine.git
+cd KernelFusion-Engine
 
 mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
@@ -117,8 +117,3 @@ cmake --build . --config Release -j$(nproc)
 bash scripts/profile.sh
 ```
 
----
-
-## 📜 License
-
-MIT
