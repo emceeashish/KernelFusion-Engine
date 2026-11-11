@@ -2,23 +2,25 @@
 #include <iostream>
 #include <vector>
 
-// Builds the 6-op pipeline using exact base_regs measured from nvcc ptxas on Tesla T4:
-// matmul=39 regs, bias_add=12 regs, relu=10 regs, layernorm=18 regs
+// Builds a 6-op Transformer FFN block (M=1024, D_MODEL=256 -> D_FFN=2048 -> D_MODEL=256)
+// Base registers calibrated from nvcc -Xptxas=-v on Tesla T4 (SM 7.5):
+//   matmul=39 regs, bias_add=12 regs, relu=10 regs, layernorm=18 regs
 static std::vector<Op> build_case_a_pipeline(int layer_id = 0) {
-    const size_t M = 1024, K = 256, N = 2048, N1 = 1024;
+    const size_t M = 1024, D_MODEL = 256, D_FFN = 2048;
     const size_t elem_sz = sizeof(float);
 
-    const size_t bytes_2048 = M * N * elem_sz;  // 8 MB activation
-    const size_t bytes_1024 = M * N1 * elem_sz; // 4 MB activation
+    const size_t bytes_model = M * D_MODEL * elem_sz; // 1 MB ([1024, 256] FP32)
+    const size_t bytes_ffn   = M * D_FFN * elem_sz;   // 8 MB ([1024, 2048] FP32)
+    const size_t weights_sz  = D_MODEL * D_FFN * elem_sz; // 2 MB weight matrix
     std::string s = std::to_string(layer_id);
 
     return {
-        {"MatMul_" + s + "a",    MATMUL,    2.0 * M * K * N,  M * K * elem_sz, K * N * elem_sz,  bytes_2048, 256, 39, 2048},
-        {"BiasAdd_" + s + "a",   BIAS_ADD,  double(M * N),    bytes_2048,      N * elem_sz,      bytes_2048, 256, 12, 0},
-        {"ReLU_" + s + "a",      RELU,      double(M * N),    bytes_2048,      0,                bytes_2048, 256, 10, 0},
-        {"LayerNorm_" + s,       LAYERNORM, 6.0 * M * N,      bytes_2048,      0,                bytes_2048, 256, 18, 72},
-        {"MatMul_" + s + "b",    MATMUL,    2.0 * M * K * N1, bytes_2048,      K * N1 * elem_sz, bytes_1024, 256, 39, 2048},
-        {"BiasAdd_" + s + "b",   BIAS_ADD,  double(M * N1),   bytes_1024,      N1 * elem_sz,     bytes_1024, 256, 12, 0}
+        {"MatMul_" + s + "a",    MATMUL,    2.0 * M * D_MODEL * D_FFN, bytes_model, weights_sz,     bytes_ffn,   256, 39, 2048},
+        {"BiasAdd_" + s + "a",   BIAS_ADD,  double(M * D_FFN),         bytes_ffn,   D_FFN * 4,      bytes_ffn,   256, 12, 0},
+        {"ReLU_" + s + "a",      RELU,      double(M * D_FFN),         bytes_ffn,   0,              bytes_ffn,   256, 10, 0},
+        {"LayerNorm_" + s,       LAYERNORM, 6.0 * M * D_FFN,           bytes_ffn,   0,              bytes_ffn,   256, 18, 72},
+        {"MatMul_" + s + "b",    MATMUL,    2.0 * M * D_FFN * D_MODEL, bytes_ffn,   weights_sz,     bytes_model, 256, 39, 2048},
+        {"BiasAdd_" + s + "b",   BIAS_ADD,  double(M * D_MODEL),       bytes_model, D_MODEL * 4,    bytes_model, 256, 12, 0}
     };
 }
 

@@ -17,10 +17,9 @@
     } while (0)
 
 constexpr int M0 = 1024;
-constexpr int K0 = 256;
-constexpr int N0 = 2048;
-constexpr int N1 = 1024;
-constexpr int ELEM_N = M0 * N0; // 2,097,152 floats (8 MB per tensor)
+constexpr int D_MODEL = 256;
+constexpr int D_FFN = 2048;
+constexpr int ELEM_N = M0 * D_FFN; // 2,097,152 floats (8 MB per tensor)
 constexpr int WARMUP_ITERS = 15;
 constexpr int BENCH_ITERS = 60;
 constexpr float EPS = 1e-5f;
@@ -319,64 +318,67 @@ int main() {
     print_kernel_hw_profile("elem_fused_vec4_kernel",        elem_fused_vec4_kernel, 256, prop);
     std::cout << "\n";
 
-    // Allocate device buffers
-    std::vector<float> h_a0(M0 * K0), h_w0(K0 * N0), h_b0(N0), h_w1(K0 * N1), h_b1(N1), h_ea(ELEM_N), h_eb(ELEM_N);
+    // Allocate device buffers for Transformer FFN:
+    // MatMul_0: [M0=1024, D_MODEL=256] x [256, D_FFN=2048] -> [1024, 2048]
+    // MatMul_1: [M0=1024, D_FFN=2048]  x [2048, D_MODEL=256] -> [1024, 256]
+    std::vector<float> h_a0(M0 * D_MODEL), h_w0(D_MODEL * D_FFN), h_b0(D_FFN);
+    std::vector<float> h_w1(D_FFN * D_MODEL), h_b1(D_MODEL), h_ea(ELEM_N), h_eb(ELEM_N);
     fill_random(h_a0, 1); fill_random(h_w0, 2); fill_random(h_b0, 3);
     fill_random(h_w1, 4); fill_random(h_b1, 5); fill_random(h_ea, 6); fill_random(h_eb, 7);
 
     float *d_a0, *d_w0, *d_b0, *d_mm0, *d_ba0, *d_relu0, *d_ln0, *d_w1, *d_b1, *d_mm1, *d_out_unfused, *d_out_fused;
-    CHECK_CUDA(cudaMalloc(&d_a0,          M0 * K0 * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_w0,          K0 * N0 * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_b0,          N0 * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_mm0,         M0 * N0 * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_ba0,         M0 * N0 * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_relu0,       M0 * N0 * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_ln0,         M0 * N0 * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_w1,          K0 * N1 * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_b1,          N1 * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_mm1,         M0 * N1 * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_out_unfused, M0 * N1 * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_out_fused,   M0 * N1 * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_a0,          M0 * D_MODEL * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_w0,          D_MODEL * D_FFN * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_b0,          D_FFN * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_mm0,         M0 * D_FFN * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_ba0,         M0 * D_FFN * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_relu0,       M0 * D_FFN * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_ln0,         M0 * D_FFN * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_w1,          D_FFN * D_MODEL * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_b1,          D_MODEL * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_mm1,         M0 * D_MODEL * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_out_unfused, M0 * D_MODEL * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_out_fused,   M0 * D_MODEL * sizeof(float)));
 
-    CHECK_CUDA(cudaMemcpy(d_a0, h_a0.data(), M0 * K0 * sizeof(float), cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(d_w0, h_w0.data(), K0 * N0 * sizeof(float), cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(d_b0, h_b0.data(), N0 * sizeof(float),      cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(d_w1, h_w1.data(), K0 * N1 * sizeof(float), cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(d_b1, h_b1.data(), N1 * sizeof(float),      cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_a0, h_a0.data(), M0 * D_MODEL * sizeof(float),      cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_w0, h_w0.data(), D_MODEL * D_FFN * sizeof(float),   cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_b0, h_b0.data(), D_FFN * sizeof(float),             cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_w1, h_w1.data(), D_FFN * D_MODEL * sizeof(float),   cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_b1, h_b1.data(), D_MODEL * sizeof(float),           cudaMemcpyHostToDevice));
 
     // -------------------------------------------------------------------------
     // Benchmark Case A: Unfused (6 kernels) vs Solver Plan [0-2] -> [3-3] -> [4-5] (3 kernels)
     // -------------------------------------------------------------------------
     constexpr int TILE = 16;
     dim3 block_mm(TILE, TILE);
-    dim3 grid_mm0((N0 + TILE - 1) / TILE, (M0 + TILE - 1) / TILE);
-    dim3 grid_mm1((N1 + TILE - 1) / TILE, (M0 + TILE - 1) / TILE);
+    dim3 grid_mm0((D_FFN + TILE - 1) / TILE, (M0 + TILE - 1) / TILE);
+    dim3 grid_mm1((D_MODEL + TILE - 1) / TILE, (M0 + TILE - 1) / TILE);
     int threads = 256;
-    int blocks0 = (M0 * N0 + threads - 1) / threads;
-    int blocks1 = (M0 * N1 + threads - 1) / threads;
+    int blocks_ffn   = (M0 * D_FFN + threads - 1) / threads;
+    int blocks_model = (M0 * D_MODEL + threads - 1) / threads;
 
     float case_a_unfused_ms = benchmark_gpu_ms([&]() {
-        matmul_kernel<TILE><<<grid_mm0, block_mm>>>(d_a0, d_w0, d_mm0, M0, N0, K0);
-        bias_add_kernel<<<blocks0, threads>>>(d_mm0, d_b0, d_ba0, M0 * N0, N0 - 1);
-        relu_kernel<<<blocks0, threads>>>(d_ba0, d_relu0, M0 * N0);
-        layernorm_warp_shfl_kernel<<<M0, threads>>>(d_relu0, d_ln0, M0, N0, EPS);
-        matmul_kernel<TILE><<<grid_mm1, block_mm>>>(d_ln0, d_w1, d_mm1, M0, N1, K0);
-        bias_add_kernel<<<blocks1, threads>>>(d_mm1, d_b1, d_out_unfused, M0 * N1, N1 - 1);
+        matmul_kernel<TILE><<<grid_mm0, block_mm>>>(d_a0, d_w0, d_mm0, M0, D_FFN, D_MODEL);
+        bias_add_kernel<<<blocks_ffn, threads>>>(d_mm0, d_b0, d_ba0, M0 * D_FFN, D_FFN - 1);
+        relu_kernel<<<blocks_ffn, threads>>>(d_ba0, d_relu0, M0 * D_FFN);
+        layernorm_warp_shfl_kernel<<<M0, threads>>>(d_relu0, d_ln0, M0, D_FFN, EPS);
+        matmul_kernel<TILE><<<grid_mm1, block_mm>>>(d_ln0, d_w1, d_mm1, M0, D_MODEL, D_FFN);
+        bias_add_kernel<<<blocks_model, threads>>>(d_mm1, d_b1, d_out_unfused, M0 * D_MODEL, D_MODEL - 1);
     });
 
     float case_a_fused_ms = benchmark_gpu_ms([&]() {
-        matmul_bias_epilogue_fused_kernel<TILE, true><<<grid_mm0, block_mm>>>(d_a0, d_w0, d_b0, d_relu0, M0, N0, K0);
-        layernorm_warp_shfl_kernel<<<M0, threads>>>(d_relu0, d_ln0, M0, N0, EPS);
-        matmul_bias_epilogue_fused_kernel<TILE, false><<<grid_mm1, block_mm>>>(d_ln0, d_w1, d_b1, d_out_fused, M0, N1, K0);
+        matmul_bias_epilogue_fused_kernel<TILE, true><<<grid_mm0, block_mm>>>(d_a0, d_w0, d_b0, d_relu0, M0, D_FFN, D_MODEL);
+        layernorm_warp_shfl_kernel<<<M0, threads>>>(d_relu0, d_ln0, M0, D_FFN, EPS);
+        matmul_bias_epilogue_fused_kernel<TILE, false><<<grid_mm1, block_mm>>>(d_ln0, d_w1, d_b1, d_out_fused, M0, D_MODEL, D_FFN);
     });
 
-    float err_case_a = max_abs_diff(d_out_unfused, d_out_fused, M0 * N1);
+    float err_case_a = max_abs_diff(d_out_unfused, d_out_fused, M0 * D_MODEL);
 
     std::cout << ">>> 2. CASE A Benchmark: 6-Op Pipeline (Epilogue Fusion [0-2] -> [3-3] -> [4-5])\n"
               << "  Unfused (6 kernels):           " << std::fixed << std::setprecision(4) << case_a_unfused_ms << " ms\n"
               << "  Fused Epilogue (3 kernels):    " << case_a_fused_ms << " ms ("
               << std::setprecision(2) << (case_a_unfused_ms / case_a_fused_ms) << "x speedup)\n"
-              << "  HBM Traffic Eliminated:        40 MB per pass\n"
+              << "  HBM Traffic Eliminated:        34 MB per pass\n"
               << "  Max Numerical Diff (L_inf):    " << std::scientific << err_case_a << " (VERIFIED)\n\n";
 
     // -------------------------------------------------------------------------
@@ -393,13 +395,13 @@ int main() {
     CHECK_CUDA(cudaMemcpy(d_eb, h_eb.data(), ELEM_N * sizeof(float), cudaMemcpyHostToDevice));
 
     float case_b_unfused_ms = benchmark_gpu_ms([&]() {
-        elem_add_kernel<<<blocks0, threads>>>(d_ea, d_eb, d_mm0, ELEM_N);
-        relu_kernel<<<blocks0, threads>>>(d_mm0, d_ba0, ELEM_N);
-        bias_add_kernel<<<blocks0, threads>>>(d_ba0, d_b0, d_elem_unfused, ELEM_N, N0 - 1);
+        elem_add_kernel<<<blocks_ffn, threads>>>(d_ea, d_eb, d_mm0, ELEM_N);
+        relu_kernel<<<blocks_ffn, threads>>>(d_mm0, d_ba0, ELEM_N);
+        bias_add_kernel<<<blocks_ffn, threads>>>(d_ba0, d_b0, d_elem_unfused, ELEM_N, D_FFN - 1);
     });
 
     float case_b_scalar_ms = benchmark_gpu_ms([&]() {
-        elem_fused_scalar_kernel<<<blocks0, threads>>>(d_ea, d_eb, d_b0, d_elem_scalar, ELEM_N, N0 - 1);
+        elem_fused_scalar_kernel<<<blocks_ffn, threads>>>(d_ea, d_eb, d_b0, d_elem_scalar, ELEM_N, D_FFN - 1);
     });
 
     int n_vec4 = ELEM_N / 4;
@@ -410,7 +412,7 @@ int main() {
             reinterpret_cast<const float4*>(d_eb),
             reinterpret_cast<const float4*>(d_b0),
             reinterpret_cast<float4*>(d_elem_vec4),
-            n_vec4, (N0 / 4) - 1);
+            n_vec4, (D_FFN / 4) - 1);
     });
 
     float err_scalar = max_abs_diff(d_elem_unfused, d_elem_scalar, ELEM_N);

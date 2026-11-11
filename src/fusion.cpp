@@ -7,7 +7,7 @@
 #include <random>
 #include <sstream>
 
-// Turing/Ampere SMs allocate registers per warp in granularity steps of 8 regs/thread
+// Turing SMs allocate registers per warp in granularity steps of 8 regs/thread
 static int round_up_regs(int regs) {
     return ((regs + 7) / 8) * 8;
 }
@@ -31,19 +31,26 @@ ClusterStats eval_cluster(const std::vector<Op>& ops, int l, int r, const GpuSpe
     bool has_layernorm = false;
 
     for (int i = l; i <= r; i++) {
+        // A tiled GEMM must be the anchor (first op) of a fused cluster;
+        // upstream elementwise ops cannot be fused into a downstream GEMM prologue
+        // without redundant shared-memory tile recomputation.
+        if (i > l && ops[i].type == MATMUL) {
+            c.time_ms = 1e9;
+            return c;
+        }
         if (ops[i].type == MATMUL) matmul_count++;
         if (ops[i].type == LAYERNORM) has_layernorm = true;
         total_flops += ops[i].flops;
     }
 
-    // Rule 1: Cannot fuse two GEMMs or GEMM + LayerNorm without a grid-wide sync barrier
+    // Cannot fuse GEMM + LayerNorm into one kernel without a grid-wide sync barrier
     // because a 16x16 GEMM tile only holds 16 columns of a 2048-column row reduction.
     if (matmul_count > 1 || (matmul_count > 0 && has_layernorm)) {
         c.time_ms = 1e9;
         return c;
     }
 
-    // Rule 2: Estimate register pressure and shared memory for fused clusters
+    // Estimate register pressure and shared memory for fused clusters
     bool pure_elemwise = (matmul_count == 0 && !has_layernorm);
     for (int i = l + 1; i <= r; i++) {
         regs = std::max(regs, ops[i].base_regs);
@@ -59,8 +66,7 @@ ClusterStats eval_cluster(const std::vector<Op>& ops, int l, int r, const GpuSpe
         } else if (pure_elemwise) {
             regs += 2; // In-register scalar/vec4 forwarding (Add -> ReLU -> Bias)
         } else {
-            // Epilogue fused into GEMM accumulator at tile writeback (0 extra regs per ptxas)
-            regs += 0;
+            regs += 0; // Epilogue fused into GEMM accumulator at tile writeback
         }
     }
 
