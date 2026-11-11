@@ -1,0 +1,13 @@
+build/
+bin/
+out/
+*.exe
+*.out
+*.a
+*.so
+*.csv
+ncu_report*
+nsys_report*
+.vscode/
+.idea/
+.DS_Store
