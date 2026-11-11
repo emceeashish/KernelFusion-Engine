@@ -160,7 +160,7 @@ Device: Tesla T4 (SM 7.5) | 40 SMs | Max Threads/SM: 1024
 ### Quick Start
 
 ```bash
-git clone [https://github.com/emceeashish/KernelFusion-Engine.git](https://github.com/emceeashish/KernelFusion-Engine.git)
+git clone https://github.com/emceeashish/KernelFusion-Engine.git
 cd KernelFusion-Engine
 
 mkdir build && cd build
