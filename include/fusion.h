@@ -55,7 +55,6 @@ struct PlanResult {
 };
 
 GpuSpec get_tesla_t4_spec();
-GpuSpec get_rtx_3090_spec();
 
 ClusterStats eval_cluster(const std::vector<Op>& ops, int l, int r, const GpuSpec& gpu);
 PlanResult evaluate_plan(const std::vector<Op>& ops, const std::vector<int>& edges, const GpuSpec& gpu);

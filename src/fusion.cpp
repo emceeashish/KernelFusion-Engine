@@ -17,11 +17,6 @@ GpuSpec get_tesla_t4_spec() {
     return {"NVIDIA Tesla T4 (SM 7.5)", 8.1, 320.0, 65536, 1024, 16, 64 * 1024};
 }
 
-GpuSpec get_rtx_3090_spec() {
-    // NVIDIA RTX 3090 (Ampere SM 8.6): 82 SMs, 35.58 TFLOPS FP32, 936 GB/s GDDR6X
-    return {"NVIDIA RTX 3090 (SM 8.6)", 35.58, 936.0, 65536, 1536, 16, 100 * 1024};
-}
-
 ClusterStats eval_cluster(const std::vector<Op>& ops, int l, int r, const GpuSpec& gpu) {
     ClusterStats c{};
     c.l = l;
