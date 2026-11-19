@@ -1,5 +1,5 @@
 # GPU Operator Fusion Decision Engine
-
+ 
 High-performance C++17/CUDA analytical cost model and hardware micro-benchmarking suite for evaluating and optimizing **operator fusion layouts** in deep learning compute graphs.
 
 Combines an exact **Dynamic Programming (DP)** solver with a **Quantum-Inspired Evolutionary Optimizer (QIEO)** to predict optimal fusion boundaries by modeling warp register allocation granularity, SM warp occupancy, shared memory capacity, and HBM memory traffic.
